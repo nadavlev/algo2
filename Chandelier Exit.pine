@@ -1,0 +1,90 @@
+//@version=5
+strategy("Demo GPT - Chandelier Exit ZLSMA Strategy", overlay=true, commission_value=0.1, slippage=3, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// === Inputs ===
+// Chandelier Exit Inputs
+var string calcGroup = 'Calculation'
+length = input.int(title='ATR Period', defval=22, group=calcGroup)
+mult = input.float(title='ATR Multiplier', step=0.1, defval=3.0, group=calcGroup)
+useClose = input.bool(title='Use Close Price for Extremums', defval=true, group=calcGroup)
+
+var string visualGroup = 'Visuals'
+showLabels = input.bool(title='Show Buy/Sell Labels', defval=true, group=visualGroup)
+highlightState = input.bool(title='Highlight State', defval=true, group=visualGroup)
+
+var string alertGroup = 'Alerts'
+awaitBarConfirmation = input.bool(title="Await Bar Confirmation", defval=true, group=alertGroup)
+
+// ZLSMA Inputs
+zlsmaLength = input.int(title="ZLSMA Length", defval=32)
+zlsmaOffset = input.int(title="ZLSMA Offset", defval=0)
+zlsmaSrc = input(close, title="ZLSMA Source")
+
+// Date Range Inputs
+startDate = input.time(timestamp("2018-01-01 00:00"), title="Start Date")
+endDate = input.time(timestamp("2020-12-31 23:59"), title="End Date")
+
+// === Calculations ===
+// Chandelier Exit Logic
+atr = mult * ta.atr(length)
+
+longStop = (useClose ? ta.highest(close, length) : ta.highest(length)) - atr
+longStopPrev = nz(longStop[1], longStop)
+longStop := close[1] > longStopPrev ? math.max(longStop, longStopPrev) : longStop
+
+shortStop = (useClose ? ta.lowest(close, length) : ta.lowest(length)) + atr
+shortStopPrev = nz(shortStop[1], shortStop)
+shortStop := close[1] < shortStopPrev ? math.min(shortStop, shortStopPrev) : shortStop
+
+var int dir = 1
+dir := close > shortStopPrev ? 1 : close < longStopPrev ? -1 : dir
+
+buySignal = dir == 1 and dir[1] == -1
+sellSignal = dir == -1 and dir[1] == 1
+
+// ZLSMA Calculation
+lsma = ta.linreg(zlsmaSrc, zlsmaLength, zlsmaOffset)
+lsma2 = ta.linreg(lsma, zlsmaLength, zlsmaOffset)
+eq = lsma - lsma2
+zlsma = lsma + eq
+
+// === Plotting ===
+longStopPlot = plot(dir == 1 ? longStop : na, title='Long Stop', style=plot.style_linebr, linewidth=2, color=color.green)
+shortStopPlot = plot(dir == -1 ? shortStop : na, title='Short Stop', style=plot.style_linebr, linewidth=2, color=color.red)
+
+plotshape(buySignal ? longStop : na, title='Buy Signal', location=location.absolute, style=shape.circle, size=size.tiny, color=color.green)
+plotshape(sellSignal ? shortStop : na, title='Sell Signal', location=location.absolute, style=shape.circle, size=size.tiny, color=color.red)
+
+plot(zlsma, title="ZLSMA", color=color.yellow, linewidth=3)
+
+// === Strategy Logic ===
+withinDateRange = (time >= startDate and time <= endDate)
+await = awaitBarConfirmation ? barstate.isconfirmed : true
+
+// Long Position Logic
+if (buySignal and close > zlsma and withinDateRange and await)
+    strategy.close("Sell")  // Ensure no short position is open
+    strategy.entry("Buy", strategy.long)
+
+// Short Position Logic
+if (sellSignal and close < zlsma and withinDateRange and await)
+    strategy.close("Buy")  // Ensure no long position is open
+    strategy.entry("Sell", strategy.short)
+
+// Exit Long Position
+if (close < zlsma and withinDateRange and strategy.position_size > 0)
+    strategy.close("Buy")
+
+// Exit Short Position
+if (close > zlsma and withinDateRange and strategy.position_size < 0)
+    strategy.close("Sell")
+
+// === Highlights ===
+longFillColor = highlightState ? dir == 1 ? color.new(color.green, 90) : na : na
+shortFillColor = highlightState ? dir == -1 ? color.new(color.red, 90) : na : na
+fill(longStopPlot, longStopPlot, title="Long State Highlight", color=longFillColor)
+fill(shortStopPlot, shortStopPlot, title="Short State Highlight", color=shortFillColor)
+
+// === Alerts ===
+alertcondition(buySignal and await, title="Buy Signal Alert", message="Buy Signal Triggered")
+alertcondition(sellSignal and await, title="Sell Signal Alert", message="Sell Signal Triggered")
